@@ -1,2 +1,2 @@
 # WindSimDemo
- A Unity project dedicated to demoing my WIP 3D Wind Simulation
+ A Unity project dedcated to demoing my WIP Wind Simulation
