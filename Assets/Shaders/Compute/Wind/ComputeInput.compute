@@ -1,0 +1,71 @@
+#pragma kernel AddMouseForce
+#pragma kernel AddConstantForce
+#pragma kernel AddConstantUniformForce
+
+
+#include "WindComputeUniforms.cginc"
+
+#include "WindComputeUtility.cginc"
+
+float DrawHalfVectorWithLength(float2 origin, float2 line_direction, float len, float2 uv, float size, float smoothness){
+    
+           uv  -= origin;
+    float  v2   = dot(line_direction, line_direction);
+    float  vUv  = dot(line_direction, uv);
+    float2 p    = line_direction * vUv/v2;
+    float  d    = distance(p, uv);
+    float  m    = 1. - step(0.,vUv/v2);
+           m   += smoothstep(len, len + smoothness/2., vUv/v2);
+    return 1. - clamp(smoothstep(size, size + smoothness, d) + m, 0. ,1.);
+}
+
+// AddMouseForce ##################################################################################################################
+RWStructuredBuffer<float4> uAppliedForce;                      
+RWStructuredBuffer<float4> uIncomingForce;                      
+float                      uForceController;                   
+float                      uForceMultiplier;                   
+float                      uForceRadius;                       
+float                      uForceFalloff;                      
+float2                     uMousePrev;                                
+float2                     uMouseCurrent;                              
+
+
+[numthreads(8,8,16)]
+void AddMouseForce(uint3 id : SV_DispatchThreadID) {
+    float2 mouseDir  = uMouseCurrent - uMousePrev;
+
+    float moveDistance = length(mouseDir);
+
+    float cellCloseEnough = DrawHalfVectorWithLength(uMousePrev, mouseDir / moveDistance, moveDistance, (float2) id.xy, uForceRadius, uForceFalloff);
+    
+    uAppliedForce[CoordToIndex(id.xyz)] += (float4(cellCloseEnough * mouseDir.xy * uForceController * uForceMultiplier, 0., 0.)) + (uIncomingForce[CoordToIndex(id.xyz)] * uForceMultiplier);
+
+    uIncomingForce[CoordToIndex(id.xyz)] = float4(0.0, 0.0, 0.0, 0.0);
+}
+
+
+// AddConstantForce ########################################################################################################
+float4                     uConstantForceDirection;
+float2                     uConstantForcePosition;
+float                      uConstantForceFalloff;
+float                      uConstantForceRadius;
+
+[numthreads(8,8,16)]
+void AddConstantForce(uint3 id : SV_DispatchThreadID) 
+{
+    float3 vecToSource = float3(uConstantForcePosition, 0.0) - (float3)id.xyz;
+    float  disToSource = length(vecToSource);
+
+    float  forceMask = smoothstep(uConstantForceRadius, uConstantForceRadius - uConstantForceFalloff, disToSource);                
+
+    uAppliedForce[CoordToIndex(id.xyz)] += float4(forceMask * uConstantForceDirection.xyz, 0.);
+}
+
+// AddConstantUniformForce ########################################################################################################
+float2 uUniformForce;
+
+[numthreads(8,8,16)]
+void AddConstantUniformForce(uint3 id : SV_DispatchThreadID)
+{
+    uAppliedForce[CoordToIndex(id.xyz)] += float4(uUniformForce.xy, 0., 0.);
+}

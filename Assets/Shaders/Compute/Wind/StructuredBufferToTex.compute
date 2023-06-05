@@ -1,0 +1,41 @@
+#pragma kernel VelocityStructureToTexture
+
+#include "WindComputeUniforms.cginc"
+
+#include "WindComputeUtility.cginc"
+
+
+float4 StructuredBufferBilinearLoad(StructuredBuffer<float4> buffer, float2 coord) 
+{
+    float4 closest_grid_coords;
+
+    closest_grid_coords.xy = max(0.,round(coord - 0.5));                
+    closest_grid_coords.zw = closest_grid_coords.xy + float2(1., 1.);  
+
+    float2 lerpFactors    = coord - closest_grid_coords.xy;            
+    
+
+    float4 LD  = buffer[CoordToIndex(closest_grid_coords.xy)];
+    float4 RD = buffer[CoordToIndex(closest_grid_coords.zy)];
+    float4 LU    = buffer[CoordToIndex(closest_grid_coords.xw)];
+    float4 RU  = buffer[CoordToIndex(closest_grid_coords.zw)];
+
+
+   return lerp(lerp(LD, RD, lerpFactors.x),             
+               lerp(LU, RU, lerpFactors.x),            
+               lerpFactors.y);                                        
+}
+
+
+StructuredBuffer<float4>   uVelocityBufferToTexSource;
+RWTexture2D<float4>        uVelocityBufferToTexTarget;
+int                        uVelocityResultsRes;
+
+[numthreads(16, 16, 1)]
+void VelocityStructureToTexture(uint3 id : SV_DispatchThreadID)
+{
+    float2 coord = (float2)id.xy / (float)(uVelocityResultsRes - 1);         
+    coord *= (float)(uResolutionX - 1);                                              
+
+    uVelocityBufferToTexTarget[id.xy] = StructuredBufferBilinearLoad(uVelocityBufferToTexSource, coord);
+}

@@ -1,0 +1,34 @@
+#pragma kernel JacobiSolve
+
+
+
+#include "WindComputeUniforms.cginc"
+
+#include "WindComputeUtility.cginc"
+
+
+StructuredBuffer<float4>     uTarget;                            
+StructuredBuffer<float4>     uUpdatedBuffer;                      
+RWStructuredBuffer<float4>   uResults;                            
+
+int                          uCurrentIteration;                  
+float                        uReciprocalDiagonal;                
+float                        uCenterFactor;       
+
+
+[numthreads(8,8,16)]
+void JacobiSolve(uint3 id : SV_DispatchThreadID)
+{
+    int3  coordinate = id.xyz;
+
+    float4 left     = uUpdatedBuffer[CoordToIndex(coordinate - int3(1, 0, 0))];
+    float4 right    = uUpdatedBuffer[CoordToIndex(coordinate + int3(1, 0, 0))];
+    float4 bottom   = uUpdatedBuffer[CoordToIndex(coordinate - int3(0, 1, 0))];
+    float4 top      = uUpdatedBuffer[CoordToIndex(coordinate + int3(0, 1, 0))];
+    float4 back     = uUpdatedBuffer[CoordToIndex(coordinate - int3(0, 0, 1))];
+    float4 front    = uUpdatedBuffer[CoordToIndex(coordinate + int3(0, 0, 1))];
+
+    float4 center = uTarget[CoordToIndex(coordinate)];
+
+    uResults[CoordToIndex(coordinate)] = (left + right + bottom + top + back + front + (uCenterFactor * center)) * uReciprocalDiagonal;
+}

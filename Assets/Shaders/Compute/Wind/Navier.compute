@@ -1,0 +1,121 @@
+#pragma kernel Advection
+#pragma kernel Divergence
+#pragma kernel CalculateNonDivergent
+
+#include "WindComputeUniforms.cginc"
+
+#include "WindComputeUtility.cginc"
+
+
+float4 StructuredBufferBilinearLoad(StructuredBuffer<float4> buffer, float3 coord) 
+{
+    float4 closest_grid_coords;
+
+    int3 LD = max(0.,round(coord - 0.5)); LD.z = coord.z;
+    int3 LU = int3(LD.x, LD.y + 1., LD.z);
+    int3 RD = int3(LD.x + 1., LD.y, LD.z);
+    int3 RU = int3(LD.x + 1., LD.y + 1, LD.z);
+    int3 BD = max(0.,round(coord - 0.5)); BD.x = coord.x;
+    int3 BU = int3(BD.x, BD.y + 1., BD.z);
+    int3 FD = int3(BD.x, BD.y, BD.z + 1.);
+    int3 FU = int3(BD.x, BD.y + 1, BD.z + 1.);
+
+    float3 lerp_factors    = coord - float3(LD.x, LD.y, BD.z);             
+
+    float4 left_down  = buffer[CoordToIndex(LD)];
+    float4 right_down = buffer[CoordToIndex(RD)];
+    float4 left_up    = buffer[CoordToIndex(LU)];
+    float4 right_up   = buffer[CoordToIndex(RU)];
+    float4 back_down  = buffer[CoordToIndex(BD)];
+    float4 front_down = buffer[CoordToIndex(FD)];
+    float4 back_up    = buffer[CoordToIndex(BU)];
+    float4 front_up   = buffer[CoordToIndex(FU)];
+
+    float4 blip = float4(
+    lerp(lerp(left_down.x, right_down.x, lerp_factors.x), lerp(left_up.x, right_up.x, lerp_factors.x),lerp_factors.x),
+    lerp(lerp(left_down.y, left_up.y, lerp_factors.y), lerp(right_down.y, right_up.y, lerp_factors.y),lerp_factors.y),
+    lerp(lerp(back_down.z, front_down.z, lerp_factors.z), lerp(back_up.z, front_up.z, lerp_factors.z),lerp_factors.z),
+    0.0
+    );
+
+   return blip;                                     
+}
+
+
+float4 gradient(StructuredBuffer<float4> scalar_field, float partial_xy, int3 coord) {
+    
+    float left     = scalar_field[CoordToIndex(coord - int3(1, 0, 0))].x;
+    float right    = scalar_field[CoordToIndex(coord + int3(1, 0, 0))].x;
+    float bottom   = scalar_field[CoordToIndex(coord - int3(0, 1, 0))].x;
+    float top      = scalar_field[CoordToIndex(coord + int3(0, 1, 0))].x;
+    float back     = scalar_field[CoordToIndex(coord - int3(0, 0, 1))].x;
+    float front    = scalar_field[CoordToIndex(coord + int3(0, 0, 1))].x;
+
+    return float4(right - left, top - bottom, front - back, 0.0)  / partial_xy;
+
+}
+
+
+// Advection ########################################################################################################
+
+float                      uDissipation;                              
+
+StructuredBuffer<float4>   uVelocityBuffer;                  
+StructuredBuffer<float4>   uAdvectTargetBuffer;              
+
+RWStructuredBuffer<float4> uAdvectedBuffer;                  
+
+[numthreads(8,8,16)]                                         
+void Advection(uint3 id : SV_DispatchThreadID)               
+{                                                            
+    float3  coord = id.xyz;                                  
+    
+    float3 fromCoord = coord - (uTimeStep * uVelocityBuffer[CoordToIndex(coord)] * (1. / uGridScale));                  
+    
+    fromCoord.x = clamp(fromCoord.x, 0.0, uResolutionX - 1.0);          
+    fromCoord.y = clamp(fromCoord.y, 0.0, uResolutionY - 1.0);          
+    fromCoord.z = clamp(fromCoord.z, 0.0, uResolutionZ - 1.0);          
+    
+    uAdvectedBuffer[CoordToIndex(coord)] = uDissipation * StructuredBufferBilinearLoad(uAdvectTargetBuffer, fromCoord);
+}
+
+
+// Divergence ########################################################################################################
+StructuredBuffer<float4>     uDivergenceVectorField;                     
+RWStructuredBuffer<float4>   uDivergenceValues;                          
+
+[numthreads(8,8,16)]                                                     
+void Divergence(uint3 id : SV_DispatchThreadID)
+{                                                                        
+    float partialXY = 2. * uGridScale;
+    int3  coord     = id.xyz;                                            
+
+    float4 left     = uDivergenceVectorField[CoordToIndex(coord - int3(1, 0, 0))];
+    float4 right    = uDivergenceVectorField[CoordToIndex(coord + int3(1, 0, 0))];
+    float4 bottom   = uDivergenceVectorField[CoordToIndex(coord - int3(0, 1, 0))];
+    float4 top      = uDivergenceVectorField[CoordToIndex(coord + int3(0, 1, 0))];
+    float4 back     = uDivergenceVectorField[CoordToIndex(coord - int3(0, 0, 1))];
+    float4 front    = uDivergenceVectorField[CoordToIndex(coord + int3(0, 0, 1))];
+
+
+    uDivergenceValues[CoordToIndex(coord)] = ((right.x - left.x + top.y - bottom.y + front.z - back.z) *  1. / partialXY).xxxx;
+}
+
+
+// CalculateNonDivergent ########################################################################################################
+StructuredBuffer<float4>    uNonZeroDivergenceVelocity;            
+StructuredBuffer<float4>    uPressureField;                                
+RWStructuredBuffer<float4>  uNonDivergent;                        
+
+[numthreads(8,8,16)]                                                     
+void CalculateNonDivergent(uint3 id : SV_DispatchThreadID)
+{                                                                           
+     float partialXY = 2. * uGridScale;
+     int3 coord      = id.xyz;                                              
+
+     float4 gradient_value = gradient(uPressureField, partialXY, coord);
+
+
+     uNonDivergent[CoordToIndex(coord)] = uNonZeroDivergenceVelocity[CoordToIndex(coord)] - gradient_value;
+
+}
